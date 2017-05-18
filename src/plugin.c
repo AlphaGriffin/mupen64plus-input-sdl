@@ -48,6 +48,13 @@
 
 #include <errno.h>
 
+const char DIR_SEPARATOR =
+#ifdef _WIN32
+                            '\\';
+#else
+                            '/';
+#endif
+
 /* defines for the force feedback rumble support */
 #ifdef __linux__
 #define BITS_PER_LONG (sizeof(long) * 8)
@@ -82,6 +89,7 @@ ptr_ConfigGetUserCachePath      ConfigGetUserCachePath = NULL;
 
 /* global data definitions */
 SController controller[4];   // 4 controllers
+FILE *controller_log[4];     // 4 controller log files [A.G.E.] --lannocc
 
 /* static data definitions */
 static void (*l_DebugCallback)(void *, int, const char *) = NULL;
@@ -682,6 +690,23 @@ EXPORT void CALL GetKeys( int Control, BUTTONS *Keys )
 #endif
     *Keys = controller[Control].buttons;
 
+    /* [A.G.E.] append input data to controller log --lannocc */
+    if (controller_log[Control] != NULL) {
+        struct timeval tv;
+        gettimeofday(&tv, NULL);
+ 
+        // WARNING: we can't seem to use multiply tv.tv_sec * 1000 when
+        // running under m64py. Overflow? So we're only doing this for
+        // a string anyways... so we write the seconds portion and then
+        // tack on the milliseconds
+        unsigned long long secs = tv.tv_sec;
+        char buf[128];
+        sprintf(buf, "%010Lu", secs);
+        sprintf(buf + 10, "%03li", tv.tv_usec / 1000);
+        sprintf(buf + 13, ",0x%8.8X\n", *(int *)&controller[Control].buttons);
+        fprintf(controller_log[Control], buf);
+    }
+
     /* handle mempack / rumblepak switching (only if rumble is active on joystick) */
 #if SDL_VERSION_ATLEAST(2,0,0)
     if (controller[Control].event_joystick) {
@@ -991,6 +1016,11 @@ EXPORT void CALL RomClosed(void)
 {
     int i;
 
+    // [A.G.E.] close controller logs --lannocc
+    for( i = 0; i < 4; i++ ) {
+        fclose(controller_log[i]);
+    }
+
     // close joysticks
     for( i = 0; i < 4; i++ ) {
         DeinitRumble(i);
@@ -1050,6 +1080,20 @@ EXPORT int CALL RomOpen(void)
             DebugMessage(M64MSG_WARNING, "Couldn't grab input! Mouse support won't work!");
         }
 #endif
+    }
+
+    // [A.G.E.] open the controller logs --lannocc
+    char logpath[128];
+    sprintf(logpath, "%sinput%c%s", ConfigGetUserDataPath(), '\0', "controllerX.dat");
+//    char fname[16];
+    mkdir(logpath, 0700);
+    logpath[strlen(logpath)] = DIR_SEPARATOR;
+    for (i = 0; i < 4; i++) {
+        logpath[strlen(logpath) - 5] = (char)('0' + i);
+//        sprintf(fname, "controller%i.dat", i);
+//        controller_log[i] = fopen(fname, "w");
+        controller_log[i] = fopen(logpath, "w");
+        
     }
 
     romopen = 1;

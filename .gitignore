@@ -1,2 +1,5 @@
 /projects/unix/_obj*/
 /projects/unix/mupen64plus-input-sdl*.so
+
+*.swp
+
