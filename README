@@ -15,6 +15,14 @@ can be found at:
 http://mupen64plus.retrouprising.com/mediawiki/index.php?title=Mupen64Plus_Plugin_Parameters#Input-SDL
 
 -------------------------------------------------------------------------------
+Notes about Alpha Griffin Edition
+-------------------------------------------------------------------------------
+
+The Alpha Griffin fork automatically logs input data from the four controllers.
+These logs are saved in the 'input' subdirectory of the mupen64plus user data directory
+(~/.local/share/mupen64plus/input on *nix systems).
+
+-------------------------------------------------------------------------------
 Notes about usage of SDL input plugin:
 -------------------------------------------------------------------------------
 

@@ -1,5 +1,6 @@
 /projects/unix/_obj*/
 /projects/unix/mupen64plus-input-sdl*.so
+/projects/unix/mupen64plus-input-sdl*.dylib
 
 *.swp
 

@@ -1084,14 +1084,14 @@ EXPORT int CALL RomOpen(void)
 
     // [A.G.E.] open the controller logs --lannocc
     char logpath[128];
+    // just as in mupen64plus-core/src/osd/screenshot.cpp, we add a NUL character
+    // instead of the separator, call mkdir, then add the separator
     sprintf(logpath, "%sinput%c%s", ConfigGetUserDataPath(), '\0', "controllerX.dat");
-//    char fname[16];
     mkdir(logpath, 0700);
     logpath[strlen(logpath)] = DIR_SEPARATOR;
+
     for (i = 0; i < 4; i++) {
         logpath[strlen(logpath) - 5] = (char)('0' + i);
-//        sprintf(fname, "controller%i.dat", i);
-//        controller_log[i] = fopen(fname, "w");
         controller_log[i] = fopen(logpath, "w");
         
     }
