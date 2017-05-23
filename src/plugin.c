@@ -703,7 +703,14 @@ EXPORT void CALL GetKeys( int Control, BUTTONS *Keys )
         char buf[128];
         sprintf(buf, "%010Lu", secs);
         sprintf(buf + 10, "%03li", tv.tv_usec / 1000);
-        sprintf(buf + 13, ",0x%8.8X\n", *(int *)&controller[Control].buttons);
+        //sprintf(buf + 13, ",0x%8.8X\n", *(int *)&controller[Control].buttons);
+        sprintf(buf + 13, ", %i, %i, %c, %c, %c\n",
+                controller[Control].buttons.X_AXIS,
+                controller[Control].buttons.Y_AXIS,
+                controller[Control].buttons.A_BUTTON ? '1' : '0',
+                controller[Control].buttons.B_BUTTON ? '1' : '0',
+                controller[Control].buttons.R_TRIG ? '1' : '0'
+            );
         fprintf(controller_log[Control], buf);
     }
 

@@ -20,7 +20,7 @@ Notes about Alpha Griffin Edition
 
 The Alpha Griffin fork automatically logs input data from the four controllers.
 These logs are saved in the 'input' subdirectory of the mupen64plus user data directory
-(~/.local/share/mupen64plus/input on *nix systems).
+(~/.local/share/mupen64plus/input on Linux/BSD systems).
 
 -------------------------------------------------------------------------------
 Notes about usage of SDL input plugin:
