@@ -755,10 +755,6 @@ EXPORT void CALL GetKeys( int Control, BUTTONS *Keys )
             DebugMessage(M64MSG_ERROR, "Unsupported AI Mode: %i", ai_mode);
     }
 
-    if (controller_log[Control] != NULL) {
-        fprintf(controller_log[Control], "--%i--\n", CoreAIGetMode());
-    }
-
     /* handle mempack / rumblepak switching (only if rumble is active on joystick) */
 #if SDL_VERSION_ATLEAST(2,0,0)
     if (controller[Control].event_joystick) {
