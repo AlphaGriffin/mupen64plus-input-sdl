@@ -177,5 +177,7 @@ extern ptr_ConfigGetUserConfigPath     ConfigGetUserConfigPath;
 extern ptr_ConfigGetUserDataPath       ConfigGetUserDataPath;
 extern ptr_ConfigGetUserCachePath      ConfigGetUserCachePath;
 
+extern ptr_CoreAIGetMode    CoreAIGetMode; // [A.G.E.] --lannocc
+
 #endif // __PLUGIN_H__
 

@@ -87,6 +87,8 @@ ptr_ConfigGetUserConfigPath     ConfigGetUserConfigPath = NULL;
 ptr_ConfigGetUserDataPath       ConfigGetUserDataPath = NULL;
 ptr_ConfigGetUserCachePath      ConfigGetUserCachePath = NULL;
 
+ptr_CoreAIGetMode   CoreAIGetMode = NULL; // [A.G.E.] --lannocc
+
 /* global data definitions */
 SController controller[4];   // 4 controllers
 FILE *controller_log[4];     // 4 controller log files [A.G.E.] --lannocc
@@ -197,10 +199,12 @@ EXPORT m64p_error CALL PluginStartup(m64p_dynlib_handle CoreLibHandle, void *Con
     ConfigGetUserDataPath = (ptr_ConfigGetUserDataPath) osal_dynlib_getproc(CoreLibHandle, "ConfigGetUserDataPath");
     ConfigGetUserCachePath = (ptr_ConfigGetUserCachePath) osal_dynlib_getproc(CoreLibHandle, "ConfigGetUserCachePath");
 
+    CoreAIGetMode = (ptr_CoreAIGetMode) osal_dynlib_getproc(CoreLibHandle, "CoreAIGetMode");
+
     if (!ConfigOpenSection || !ConfigDeleteSection || !ConfigSaveFile || !ConfigSaveSection || !ConfigSetParameter || !ConfigGetParameter ||
         !ConfigSetDefaultInt || !ConfigSetDefaultFloat || !ConfigSetDefaultBool || !ConfigSetDefaultString ||
         !ConfigGetParamInt   || !ConfigGetParamFloat   || !ConfigGetParamBool   || !ConfigGetParamString ||
-        !ConfigGetSharedDataFilepath || !ConfigGetUserConfigPath || !ConfigGetUserDataPath || !ConfigGetUserCachePath)
+        !ConfigGetSharedDataFilepath || !ConfigGetUserConfigPath || !ConfigGetUserDataPath || !ConfigGetUserCachePath || !CoreAIGetMode)
     {
         DebugMessage(M64MSG_ERROR, "Couldn't connect to Core configuration functions");
         return M64ERR_INCOMPATIBLE;
@@ -690,28 +694,69 @@ EXPORT void CALL GetKeys( int Control, BUTTONS *Keys )
 #endif
     *Keys = controller[Control].buttons;
 
-    /* [A.G.E.] append input data to controller log --lannocc */
+    /* [A.G.E.] check AI mode and append input data to controller log if recording --lannocc */
+    int ai_mode = CoreAIGetMode();
+
+    switch (ai_mode) {
+        case M64AI_RECORDING:
+            if (controller_log[Control] == NULL) { // open the controller log file
+                char logpath[128];
+
+                // just as in mupen64plus-core/src/osd/screenshot.cpp, we add a NUL character
+                // instead of the separator, call mkdir, then add the separator
+                sprintf(logpath, "%sinput%c%s", ConfigGetUserDataPath(), '\0', "controllerX.dat");
+                mkdir(logpath, 0700);
+                logpath[strlen(logpath)] = DIR_SEPARATOR;
+
+                logpath[strlen(logpath) - 5] = (char)('0' + Control);
+                controller_log[Control] = fopen(logpath, "w");
+
+                if (controller_log[Control] == NULL) {
+                    DebugMessage(M64MSG_ERROR, "Failed to open controller log for output: %s", logpath);
+                }
+            }
+
+            if (controller_log[Control] != NULL) {  // log the input data
+                struct timeval tv;
+                gettimeofday(&tv, NULL);
+         
+                // WARNING: we can't seem to use multiply tv.tv_sec * 1000 when
+                // running under m64py. Overflow? So we're only doing this for
+                // a string anyways... so we write the seconds portion and then
+                // tack on the milliseconds
+                unsigned long long secs = tv.tv_sec;
+                char buf[128];
+                sprintf(buf, "%010Lu", secs);
+                sprintf(buf + 10, "%03li", tv.tv_usec / 1000);
+                //sprintf(buf + 13, ",0x%8.8X\n", *(int *)&controller[Control].buttons);
+                sprintf(buf + 13, ", %i, %i, %c, %c, %c\n",
+                        controller[Control].buttons.X_AXIS,
+                        controller[Control].buttons.Y_AXIS,
+                        controller[Control].buttons.A_BUTTON ? '1' : '0',
+                        controller[Control].buttons.B_BUTTON ? '1' : '0',
+                        controller[Control].buttons.R_TRIG ? '1' : '0'
+                    );
+                fprintf(controller_log[Control], buf);
+            }
+
+            break;
+
+        case M64AI_PLAYING:
+            DebugMessage(M64MSG_WARNING, "AI Playing mode not yet supported");
+            break;
+
+        case M64AI_NONE:
+            if (controller_log[Control] != NULL) {  // close controller log
+                fclose(controller_log[Control]);
+            }
+            break;
+
+        default:
+            DebugMessage(M64MSG_ERROR, "Unsupported AI Mode: %i", ai_mode);
+    }
+
     if (controller_log[Control] != NULL) {
-        struct timeval tv;
-        gettimeofday(&tv, NULL);
- 
-        // WARNING: we can't seem to use multiply tv.tv_sec * 1000 when
-        // running under m64py. Overflow? So we're only doing this for
-        // a string anyways... so we write the seconds portion and then
-        // tack on the milliseconds
-        unsigned long long secs = tv.tv_sec;
-        char buf[128];
-        sprintf(buf, "%010Lu", secs);
-        sprintf(buf + 10, "%03li", tv.tv_usec / 1000);
-        //sprintf(buf + 13, ",0x%8.8X\n", *(int *)&controller[Control].buttons);
-        sprintf(buf + 13, ", %i, %i, %c, %c, %c\n",
-                controller[Control].buttons.X_AXIS,
-                controller[Control].buttons.Y_AXIS,
-                controller[Control].buttons.A_BUTTON ? '1' : '0',
-                controller[Control].buttons.B_BUTTON ? '1' : '0',
-                controller[Control].buttons.R_TRIG ? '1' : '0'
-            );
-        fprintf(controller_log[Control], buf);
+        fprintf(controller_log[Control], "--%i--\n", CoreAIGetMode());
     }
 
     /* handle mempack / rumblepak switching (only if rumble is active on joystick) */
@@ -1023,9 +1068,10 @@ EXPORT void CALL RomClosed(void)
 {
     int i;
 
-    // [A.G.E.] close controller logs --lannocc
+    // [A.G.E.] close controller logs if open --lannocc
     for( i = 0; i < 4; i++ ) {
-        fclose(controller_log[i]);
+        if (controller_log[i] != NULL)
+            fclose(controller_log[i]);
     }
 
     // close joysticks
@@ -1087,20 +1133,6 @@ EXPORT int CALL RomOpen(void)
             DebugMessage(M64MSG_WARNING, "Couldn't grab input! Mouse support won't work!");
         }
 #endif
-    }
-
-    // [A.G.E.] open the controller logs --lannocc
-    char logpath[128];
-    // just as in mupen64plus-core/src/osd/screenshot.cpp, we add a NUL character
-    // instead of the separator, call mkdir, then add the separator
-    sprintf(logpath, "%sinput%c%s", ConfigGetUserDataPath(), '\0', "controllerX.dat");
-    mkdir(logpath, 0700);
-    logpath[strlen(logpath)] = DIR_SEPARATOR;
-
-    for (i = 0; i < 4; i++) {
-        logpath[strlen(logpath) - 5] = (char)('0' + i);
-        controller_log[i] = fopen(logpath, "w");
-        
     }
 
     romopen = 1;
