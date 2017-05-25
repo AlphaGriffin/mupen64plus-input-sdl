@@ -27,6 +27,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
+#include <fcntl.h>
 
 #define M64P_PLUGIN_PROTOTYPES 1
 #include "config.h"
@@ -47,6 +48,24 @@
 #endif /* __linux__ */
 
 #include <errno.h>
+
+/* [A.G.E.] Socket support for input --lannocc */
+#ifdef _WIN32
+  /* See http://stackoverflow.com/questions/12765743/getaddrinfo-on-win32 */
+  #ifndef _WIN32_WINNT
+    #define _WIN32_WINNT 0x0501  /* Windows XP. */
+  #endif
+  #include <winsock2.h>
+  #include <Ws2tcpip.h>
+  typedef unsigned int SOCKET;
+#else
+  /* Assume that any non-Windows platform uses POSIX-style sockets instead. */
+  #include <sys/socket.h>
+  #include <arpa/inet.h>
+  #include <netdb.h>  /* Needed for getaddrinfo() and freeaddrinfo() */
+  #include <unistd.h> /* Needed for close() */
+  typedef int SOCKET;
+#endif
 
 const char DIR_SEPARATOR =
 #ifdef _WIN32
@@ -91,7 +110,11 @@ ptr_CoreAIGetMode   CoreAIGetMode = NULL; // [A.G.E.] --lannocc
 
 /* global data definitions */
 SController controller[4];   // 4 controllers
-FILE *controller_log[4];     // 4 controller log files [A.G.E.] --lannocc
+
+/* [A.G.E.] definitions for the AI system --lannocc */
+FILE *controller_log[4];     // 4 controller log files
+SOCKET controller_master;    // master socket for incoming controller connections
+SOCKET controller_socket;    // active connected socket
 
 /* static data definitions */
 static void (*l_DebugCallback)(void *, int, const char *) = NULL;
@@ -145,6 +168,18 @@ void DebugMessage(int level, const char *message, ...)
 }
 
 static CONTROL temp_core_controlinfo[4];
+
+/*
+ * [A.G.E.] --lannocc
+ */
+static int IsSocketValid(int sockfd)
+{
+#ifdef _WIN32
+    return sockfd != INVALID_SOCKET;
+#else
+    return sockfd >= 0;
+#endif
+}
 
 /* Mupen64Plus plugin functions */
 EXPORT m64p_error CALL PluginStartup(m64p_dynlib_handle CoreLibHandle, void *Context,
@@ -225,6 +260,44 @@ EXPORT m64p_error CALL PluginStartup(m64p_dynlib_handle CoreLibHandle, void *Con
     /* read plugin config from core config database, auto-config if necessary and update core database */
     load_configuration(1);
 
+    /* [A.G.E.] initialize socket system for AI control --lannocc */
+    int sport = 4420; // socket port
+#ifdef _WIN32
+    WSADATA wsa_data;
+    WSAStartup(MAKEWORD(1,1), &wsa_data);
+#endif
+    controller_master = socket(AF_INET, SOCK_STREAM, 0);
+    if (IsSocketValid(controller_master)) {
+        fcntl(controller_master, F_SETFL, O_NONBLOCK); // set to non-blocking mode
+
+        struct sockaddr_in serv_addr;
+        bzero((char *) &serv_addr, sizeof(serv_addr));
+        serv_addr.sin_family = AF_INET;
+        serv_addr.sin_addr.s_addr = INADDR_ANY;
+        serv_addr.sin_port = htons(sport);
+
+        if (bind(controller_master, (struct sockaddr *) &serv_addr, sizeof(serv_addr)) >= 0) {
+            listen(controller_master, 5);
+        }
+        else {
+            DebugMessage(M64MSG_ERROR, "Failed to bind master socket for controller input on port %i", sport);
+#ifdef _WIN32
+            controller_master = INVALID_SOCKET;
+#else
+            controller_master = -1;
+#endif
+        }
+
+#ifdef _WIN32
+        controller_socket = INVALID_SOCKET;
+#else
+        controller_socket = -1;
+#endif
+    }
+    else {
+        DebugMessage(M64MSG_ERROR, "Failed to open master socket for controller input");
+    }
+
     l_PluginInit = 1;
     return M64ERR_SUCCESS;
 }
@@ -237,6 +310,11 @@ EXPORT m64p_error CALL PluginShutdown(void)
     /* reset some local variables */
     l_DebugCallback = NULL;
     l_DebugCallContext = NULL;
+
+#ifdef _WIN32
+    /* [A.G.E.] shutdown the socket system --lannocc */
+    WSACleanup();
+#endif
 
     l_PluginInit = 0;
     return M64ERR_SUCCESS;
@@ -689,12 +767,7 @@ EXPORT void CALL GetKeys( int Control, BUTTONS *Keys )
         }
     }
 
-#ifdef _DEBUG
-    DebugMessage(M64MSG_VERBOSE, "Controller #%d value: 0x%8.8X", Control, *(int *)&controller[Control].buttons );
-#endif
-    *Keys = controller[Control].buttons;
-
-    /* [A.G.E.] check AI mode and append input data to controller log if recording --lannocc */
+    /* [A.G.E.] check AI mode and act accordingly --lannocc */
     int ai_mode = CoreAIGetMode();
 
     switch (ai_mode) {
@@ -742,7 +815,23 @@ EXPORT void CALL GetKeys( int Control, BUTTONS *Keys )
             break;
 
         case M64AI_PLAYING:
-            DebugMessage(M64MSG_WARNING, "AI Playing mode not yet supported");
+            if (IsSocketValid(controller_master)) {
+                if (! IsSocketValid(controller_socket)) { // try to get a connection
+                    struct sockaddr_in cli_addr;
+                    unsigned int clilen = sizeof(cli_addr);
+                    controller_socket = accept(controller_master, (struct sockaddr *) &cli_addr, &clilen);
+                }
+
+                if (IsSocketValid(controller_socket)) { // try to get data
+                    char buffer[256];
+                    bzero(buffer, 256);
+                    int count = read(controller_socket, buffer, 256);
+                    if (count > 0) {
+                        controller[Control].buttons.START_BUTTON = 1; // FIXME testing
+                    }
+                }
+            }
+
             break;
 
         case M64AI_NONE:
@@ -754,6 +843,11 @@ EXPORT void CALL GetKeys( int Control, BUTTONS *Keys )
         default:
             DebugMessage(M64MSG_ERROR, "Unsupported AI Mode: %i", ai_mode);
     }
+
+#ifdef _DEBUG
+    DebugMessage(M64MSG_VERBOSE, "Controller #%d value: 0x%8.8X", Control, *(int *)&controller[Control].buttons );
+#endif
+    *Keys = controller[Control].buttons;
 
     /* handle mempack / rumblepak switching (only if rumble is active on joystick) */
 #if SDL_VERSION_ATLEAST(2,0,0)
