@@ -113,8 +113,9 @@ SController controller[4];   // 4 controllers
 
 /* [A.G.E.] definitions for the AI system --lannocc */
 FILE *controller_log[4];     // 4 controller log files
-SOCKET controller_master;    // master socket for incoming controller connections
-SOCKET controller_socket;    // active connected socket
+SOCKET controller_master[4]; // 4 master sockets for incoming controller connections
+SOCKET controller_socket[4]; // 4 active connected sockets
+BUTTONS controller_in[4];    // 4 last-read controller states
 
 /* static data definitions */
 static void (*l_DebugCallback)(void *, int, const char *) = NULL;
@@ -260,41 +261,43 @@ EXPORT m64p_error CALL PluginStartup(m64p_dynlib_handle CoreLibHandle, void *Con
     /* read plugin config from core config database, auto-config if necessary and update core database */
     load_configuration(1);
 
-    /* [A.G.E.] initialize socket system for AI control --lannocc */
-    int sport = 4420; // socket port
+    /* [A.G.E.] initialize and bind sockets for AI control --lannocc */
+    int sport = 4420; // starting socket port
 #ifdef _WIN32
     WSADATA wsa_data;
     WSAStartup(MAKEWORD(1,1), &wsa_data);
 #endif
-    controller_master = socket(AF_INET, SOCK_STREAM, 0);
-    if (IsSocketValid(controller_master)) {
-        fcntl(controller_master, F_SETFL, O_NONBLOCK); // set to non-blocking mode
+    for (i = 0; i < 4; i++) {
+        controller_master[i] = socket(AF_INET, SOCK_STREAM, 0);
+        if (IsSocketValid(controller_master[i])) {
+            fcntl(controller_master[i], F_SETFL, O_NONBLOCK); // set to non-blocking mode
 
-        struct sockaddr_in serv_addr;
-        serv_addr.sin_family = AF_INET;
-        serv_addr.sin_addr.s_addr = INADDR_ANY;
-        serv_addr.sin_port = htons(sport);
+            struct sockaddr_in serv_addr;
+            serv_addr.sin_family = AF_INET;
+            serv_addr.sin_addr.s_addr = INADDR_ANY;
+            serv_addr.sin_port = htons(sport + i);
 
-        if (bind(controller_master, (struct sockaddr *) &serv_addr, sizeof(serv_addr)) >= 0) {
-            listen(controller_master, 5);
+            if (bind(controller_master[i], (struct sockaddr *) &serv_addr, sizeof(serv_addr)) >= 0) {
+                listen(controller_master[i], 5);
+            }
+            else {
+                DebugMessage(M64MSG_ERROR, "Failed to bind master socket for controller input %i on port %i", i, sport);
+#ifdef _WIN32
+                controller_master[i] = INVALID_SOCKET;
+#else
+                controller_master[i] = -1;
+#endif
+            }
+
+#ifdef _WIN32
+            controller_socket[i] = INVALID_SOCKET;
+#else
+            controller_socket[i] = -1;
+#endif
         }
         else {
-            DebugMessage(M64MSG_ERROR, "Failed to bind master socket for controller input on port %i", sport);
-#ifdef _WIN32
-            controller_master = INVALID_SOCKET;
-#else
-            controller_master = -1;
-#endif
+            DebugMessage(M64MSG_ERROR, "Failed to open master socket for controller input %i", i);
         }
-
-#ifdef _WIN32
-        controller_socket = INVALID_SOCKET;
-#else
-        controller_socket = -1;
-#endif
-    }
-    else {
-        DebugMessage(M64MSG_ERROR, "Failed to open master socket for controller input");
     }
 
     l_PluginInit = 1;
@@ -810,24 +813,29 @@ EXPORT void CALL GetKeys( int Control, BUTTONS *Keys )
             if (controller[Control].buttons.Value != 0) {
                 DebugMessage(M64MSG_INFO, "Manual override detected for player %i, 0x%8.8X", Control, controller[Control].buttons.Value);
             }
-            else if (IsSocketValid(controller_master)) {
-                if (! IsSocketValid(controller_socket)) { // try to get a connection
+            else if (IsSocketValid(controller_master[Control])) {
+                if (! IsSocketValid(controller_socket[Control])) { // try to get a connection
                     struct sockaddr_in cli_addr;
                     unsigned int clilen = sizeof(cli_addr);
-                    controller_socket = accept(controller_master, (struct sockaddr *) &cli_addr, &clilen);
+                    controller_socket[Control] = accept(controller_master[Control], (struct sockaddr *) &cli_addr, &clilen);
+                    controller_in[Control].Value = 0;
+                    DebugMessage(M64MSG_ERROR, "got a connection"); // FIXME testing
                 }
 
-                if (IsSocketValid(controller_socket)) { // try to get data
+                if (IsSocketValid(controller_socket[Control])) { // try to get data
                     char data[4];
-                    int count = read(controller_socket, data, 4);
+                    int count = read(controller_socket[Control], data, 4);
                     if (count > 0) {
+                        DebugMessage(M64MSG_ERROR, "got some data"); // FIXME testing
                         if (count == 4) {
-                            controller[Control].buttons.Value = (data[3] << 24) + (data[2] << 16) + (data[1] << 8) + data[0];
+                            controller_in[Control].Value = (data[3] << 24) + (data[2] << 16) + (data[1] << 8) + data[0];
                         }
                         else {
                             DebugMessage(M64MSG_ERROR, "Incomplete controller data received from socket; got %i bytes", count);
                         }
                     }
+
+                    controller[Control].buttons.Value = controller_in[Control].Value;
                 }
             }
 
@@ -836,6 +844,15 @@ EXPORT void CALL GetKeys( int Control, BUTTONS *Keys )
         case M64AI_NONE:
             if (controller_log[Control] != NULL) {  // close controller log
                 fclose(controller_log[Control]);
+                controller_log[Control] = NULL;
+            }
+            if (IsSocketValid(controller_socket[Control])) {  // close socket
+                close(controller_socket[Control]);
+#ifdef _WIN32
+                controller_socket[Control] = INVALID_SOCKET;
+#else
+                controller_socket[Control] = -1;
+#endif
             }
             break;
 
@@ -843,6 +860,7 @@ EXPORT void CALL GetKeys( int Control, BUTTONS *Keys )
             DebugMessage(M64MSG_ERROR, "Unsupported AI Mode: %i", ai_mode);
     }
 
+    DebugMessage(M64MSG_ERROR, "Controller #%d value: 0x%8.8X", Control, *(int *)&controller[Control].buttons ); //FIXME testing
 #ifdef _DEBUG
     DebugMessage(M64MSG_VERBOSE, "Controller #%d value: 0x%8.8X", Control, *(int *)&controller[Control].buttons );
 #endif
@@ -1159,8 +1177,31 @@ EXPORT void CALL RomClosed(void)
 
     // [A.G.E.] close controller logs if open --lannocc
     for( i = 0; i < 4; i++ ) {
-        if (controller_log[i] != NULL)
+        if (controller_log[i] != NULL) {
             fclose(controller_log[i]);
+            controller_log[i] = NULL;
+        }
+    }
+
+    // [A.G.E.] close controller sockets if open --lannocc
+    for( i = 0; i < 4; i++ ) {
+        if (IsSocketValid(controller_socket[i])) {
+            close(controller_socket[i]);
+#ifdef _WIN32
+            controller_socket[i] = INVALID_SOCKET;
+#else
+            controller_socket[i] = -1;
+#endif
+        }
+
+        if (IsSocketValid(controller_master[i])) {
+            close(controller_master[i]);
+#ifdef _WIN32
+            controller_master[i] = INVALID_SOCKET;
+#else
+            controller_master[i] = -1;
+#endif
+        }
     }
 
     // close joysticks
