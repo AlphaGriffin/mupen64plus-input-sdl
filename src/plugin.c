@@ -819,14 +819,12 @@ EXPORT void CALL GetKeys( int Control, BUTTONS *Keys )
                     unsigned int clilen = sizeof(cli_addr);
                     controller_socket[Control] = accept(controller_master[Control], (struct sockaddr *) &cli_addr, &clilen);
                     controller_in[Control].Value = 0;
-                    DebugMessage(M64MSG_ERROR, "got a connection"); // FIXME testing
                 }
 
                 if (IsSocketValid(controller_socket[Control])) { // try to get data
                     char data[4];
                     int count = read(controller_socket[Control], data, 4);
                     if (count > 0) {
-                        DebugMessage(M64MSG_ERROR, "got some data"); // FIXME testing
                         if (count == 4) {
                             controller_in[Control].Value = (data[3] << 24) + (data[2] << 16) + (data[1] << 8) + data[0];
                         }
@@ -860,7 +858,6 @@ EXPORT void CALL GetKeys( int Control, BUTTONS *Keys )
             DebugMessage(M64MSG_ERROR, "Unsupported AI Mode: %i", ai_mode);
     }
 
-    DebugMessage(M64MSG_ERROR, "Controller #%d value: 0x%8.8X", Control, *(int *)&controller[Control].buttons ); //FIXME testing
 #ifdef _DEBUG
     DebugMessage(M64MSG_VERBOSE, "Controller #%d value: 0x%8.8X", Control, *(int *)&controller[Control].buttons );
 #endif
