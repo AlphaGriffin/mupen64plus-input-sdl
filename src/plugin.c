@@ -271,7 +271,6 @@ EXPORT m64p_error CALL PluginStartup(m64p_dynlib_handle CoreLibHandle, void *Con
         fcntl(controller_master, F_SETFL, O_NONBLOCK); // set to non-blocking mode
 
         struct sockaddr_in serv_addr;
-        bzero((char *) &serv_addr, sizeof(serv_addr));
         serv_addr.sin_family = AF_INET;
         serv_addr.sin_addr.s_addr = INADDR_ANY;
         serv_addr.sin_port = htons(sport);
@@ -801,21 +800,17 @@ EXPORT void CALL GetKeys( int Control, BUTTONS *Keys )
                 char buf[128];
                 sprintf(buf, "%010Lu", secs);
                 sprintf(buf + 10, "%03li", tv.tv_usec / 1000);
-                //sprintf(buf + 13, ",0x%8.8X\n", *(int *)&controller[Control].buttons);
-                sprintf(buf + 13, ", %i, %i, %c, %c, %c\n",
-                        controller[Control].buttons.X_AXIS,
-                        controller[Control].buttons.Y_AXIS,
-                        controller[Control].buttons.A_BUTTON ? '1' : '0',
-                        controller[Control].buttons.B_BUTTON ? '1' : '0',
-                        controller[Control].buttons.R_TRIG ? '1' : '0'
-                    );
-                fprintf(controller_log[Control], buf);
+                sprintf(buf + 13, ",0x%8.8X\n", *(int *)&controller[Control].buttons);
+                fprintf(controller_log[Control], "%s", buf);
             }
 
             break;
 
         case M64AI_PLAYING:
-            if (IsSocketValid(controller_master)) {
+            if (controller[Control].buttons.Value != 0) {
+                DebugMessage(M64MSG_INFO, "Manual override detected for player %i, 0x%8.8X", Control, controller[Control].buttons.Value);
+            }
+            else if (IsSocketValid(controller_master)) {
                 if (! IsSocketValid(controller_socket)) { // try to get a connection
                     struct sockaddr_in cli_addr;
                     unsigned int clilen = sizeof(cli_addr);
@@ -823,11 +818,15 @@ EXPORT void CALL GetKeys( int Control, BUTTONS *Keys )
                 }
 
                 if (IsSocketValid(controller_socket)) { // try to get data
-                    char buffer[256];
-                    bzero(buffer, 256);
-                    int count = read(controller_socket, buffer, 256);
+                    char data[4];
+                    int count = read(controller_socket, data, 4);
                     if (count > 0) {
-                        controller[Control].buttons.START_BUTTON = 1; // FIXME testing
+                        if (count == 4) {
+                            controller[Control].buttons.Value = (data[3] << 24) + (data[2] << 16) + (data[1] << 8) + data[0];
+                        }
+                        else {
+                            DebugMessage(M64MSG_ERROR, "Incomplete controller data received from socket; got %i bytes", count);
+                        }
                     }
                 }
             }
